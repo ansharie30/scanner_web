@@ -17,6 +17,23 @@ class ScannerController extends Controller
         );
     }
 
+    public function storeFolder(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'name' => ['required', 'string', 'max:255', 'unique:folders,name'],
+        ]);
+
+        $folder = Folder::create([
+            'name' => trim($data['name']),
+            'created_by' => $request->user()->id,
+        ]);
+
+        return response()->json([
+            'id' => $folder->id,
+            'name' => $folder->name,
+        ], 201);
+    }
+
     public function upload(Request $request, Folder $folder): JsonResponse
     {
         $data = $request->validate([
