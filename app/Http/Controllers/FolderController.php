@@ -2,7 +2,9 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Document;
 use App\Models\Folder;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
@@ -33,26 +35,67 @@ class FolderController extends Controller
         return back();
     }
 
-    public function show(Folder $folder): Response
+    public function show(Request $request, Folder $folder): Response
     {
-        $documents = $folder->documents()
-            ->with('uploader:id,name')
-            ->latest()
-            ->get()
-            ->map(fn ($doc) => [
-                'id' => $doc->id,
-                'title' => $doc->title,
-                'original_name' => $doc->original_name,
-                'size' => $doc->size,
-                'source' => $doc->source,
-                'uploaded_by' => $doc->uploaded_by,
-                'uploader_name' => $doc->uploader?->name,
-                'created_at' => $doc->created_at->format('M d, Y h:i A'),
+        $validated = $request->validate([
+            'search' => ['nullable', 'string', 'max:255'],
+            'date_from' => ['nullable', 'date'],
+            'date_to' => ['nullable', 'date', 'after_or_equal:date_from'],
+            'per_page' => ['sometimes', 'integer', Rule::in([10, 20, 50])],
+            'page' => ['sometimes', 'integer', 'min:1'],
+        ]);
+        $search = trim($validated['search'] ?? '');
+        $dateFrom = $validated['date_from'] ?? '';
+        $dateTo = $validated['date_to'] ?? '';
+        $perPage = (int) ($validated['per_page'] ?? 10);
+
+        $documentsQuery = $folder->documents()->with('uploader:id,name');
+
+        if ($search !== '') {
+            $documentsQuery->where(function (Builder $query) use ($search): void {
+                $query
+                    ->where('title', 'like', "%{$search}%")
+                    ->orWhere('original_name', 'like', "%{$search}%")
+                    ->orWhere('source', 'like', "%{$search}%")
+                    ->orWhereHas('uploader', fn (Builder $uploaderQuery) => $uploaderQuery
+                        ->where('name', 'like', "%{$search}%"));
+            });
+        }
+
+        if ($dateFrom !== '') {
+            $documentsQuery->whereDate('created_at', '>=', $dateFrom);
+        }
+
+        if ($dateTo !== '') {
+            $documentsQuery->whereDate('created_at', '<=', $dateTo);
+        }
+
+        $documents = $documentsQuery
+            ->orderByDesc('created_at')
+            ->orderByDesc('id')
+            ->paginate($perPage)
+            ->withQueryString()
+            ->through(fn (Document $document): array => [
+                'id' => $document->id,
+                'title' => $document->title,
+                'original_name' => $document->original_name,
+                'size' => $document->size,
+                'source' => $document->source,
+                'uploaded_by' => $document->uploaded_by,
+                'uploader_name' => $document->uploader?->name,
+                'created_at' => $document->created_at->format('M d, Y h:i A'),
             ]);
 
         return Inertia::render('folders/Show', [
             'folder' => $folder->only(['id', 'name']),
             'documents' => $documents,
+            'search' => $search,
+            'dateFrom' => $dateFrom,
+            'dateTo' => $dateTo,
+            'perPage' => $perPage,
+            'totalDocuments' => $folder->documents()->count(),
+            'totalSize' => $folder->documents()->sum('size'),
+            'scannerUploads' => $folder->documents()->where('source', 'scanner')->count(),
         ]);
     }
 
