@@ -1,6 +1,15 @@
 <script setup lang="ts">
 import { Head, Link, router, useForm, usePage } from '@inertiajs/vue3';
-import { FileText, Folder, FolderPlus, MoreHorizontal, Pencil, Search, Trash2, X } from 'lucide-vue-next';
+import {
+    FileText,
+    Folder,
+    FolderPlus,
+    MoreHorizontal,
+    Pencil,
+    Search,
+    Trash2,
+    X,
+} from 'lucide-vue-next';
 import { computed, ref } from 'vue';
 
 import { Button } from '@/components/ui/button';
@@ -35,9 +44,14 @@ interface FolderRow {
     id: number;
     name: string;
     documents_count: number;
+    children_count: number;
 }
 
-const props = defineProps<{ folders: FolderRow[] }>();
+const props = defineProps<{
+    folders: FolderRow[];
+    totalFolders: number;
+    totalDocuments: number;
+}>();
 
 defineOptions({
     layout: {
@@ -46,19 +60,19 @@ defineOptions({
 });
 
 const page = usePage();
-const isSuperAdmin = computed(() => (page.props.auth as any)?.user?.role === 'super_admin');
+const isSuperAdmin = computed(
+    () => (page.props.auth as any)?.user?.role === 'super_admin',
+);
 const search = ref('');
 const visibleFolders = computed(() => {
     const query = search.value.trim().toLowerCase();
 
     return query
-        ? props.folders.filter((folder) => folder.name.toLowerCase().includes(query))
+        ? props.folders.filter((folder) =>
+              folder.name.toLowerCase().includes(query),
+          )
         : props.folders;
 });
-const totalDocuments = computed(() =>
-    props.folders.reduce((total, folder) => total + folder.documents_count, 0),
-);
-
 /* ---------- Create ---------- */
 const createOpen = ref(false);
 const createForm = useForm({ name: '' });
@@ -129,7 +143,9 @@ function deleteFolder() {
         <!-- Header -->
         <div class="flex flex-wrap items-end justify-between gap-4">
             <div class="space-y-1">
-                <p class="text-sm font-medium text-muted-foreground">Document library</p>
+                <p class="text-sm font-medium text-muted-foreground">
+                    Document library
+                </p>
                 <h1 class="text-2xl font-semibold tracking-tight">Folders</h1>
                 <p class="text-sm text-muted-foreground">
                     Browse and organize your documents.
@@ -145,12 +161,15 @@ function deleteFolder() {
                     </Button>
                 </DialogTrigger>
 
-                <DialogContent class="max-h-[90vh] max-h-[90dvh] overflow-y-auto sm:max-w-md">
+                <DialogContent
+                    class="max-h-[90dvh] max-h-[90vh] overflow-y-auto sm:max-w-md"
+                >
                     <form class="grid gap-4" @submit.prevent="createFolder">
                         <DialogHeader>
                             <DialogTitle>New folder</DialogTitle>
                             <DialogDescription>
-                                Give your folder a name. You can rename it later.
+                                Give your folder a name. You can rename it
+                                later.
                             </DialogDescription>
                         </DialogHeader>
 
@@ -164,19 +183,30 @@ function deleteFolder() {
                                 autofocus
                                 :aria-invalid="!!createForm.errors.name"
                             />
-                            <p v-if="createForm.errors.name" class="text-sm text-destructive">
+                            <p
+                                v-if="createForm.errors.name"
+                                class="text-sm text-destructive"
+                            >
                                 {{ createForm.errors.name }}
                             </p>
                         </div>
 
                         <DialogFooter class="gap-2 sm:gap-0">
                             <DialogClose as-child>
-                                <Button type="button" variant="outline" class="w-full sm:w-auto">Cancel</Button>
+                                <Button
+                                    type="button"
+                                    variant="outline"
+                                    class="w-full sm:w-auto"
+                                    >Cancel</Button
+                                >
                             </DialogClose>
                             <Button
                                 type="submit"
                                 class="w-full sm:w-auto"
-                                :disabled="createForm.processing || !createForm.name.trim()"
+                                :disabled="
+                                    createForm.processing ||
+                                    !createForm.name.trim()
+                                "
                             >
                                 Create folder
                             </Button>
@@ -186,13 +216,27 @@ function deleteFolder() {
             </Dialog>
         </div>
 
-        <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div class="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-muted-foreground">
-                <span>{{ props.folders.length }} {{ props.folders.length === 1 ? 'folder' : 'folders' }}</span>
-                <span>{{ totalDocuments }} {{ totalDocuments === 1 ? 'document' : 'documents' }}</span>
+        <div
+            class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"
+        >
+            <div
+                class="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-muted-foreground"
+            >
+                <span
+                    >{{ props.totalFolders }}
+                    {{ props.totalFolders === 1 ? 'folder' : 'folders' }}</span
+                >
+                <span
+                    >{{ props.totalDocuments }}
+                    {{
+                        props.totalDocuments === 1 ? 'document' : 'documents'
+                    }}</span
+                >
             </div>
             <div class="relative w-full sm:max-w-xs">
-                <Search class="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+                <Search
+                    class="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
+                />
                 <Input
                     v-model="search"
                     class="pr-9 pl-9"
@@ -218,7 +262,9 @@ function deleteFolder() {
             v-if="props.folders.length === 0"
             class="flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed px-4 py-12 text-center sm:px-6 sm:py-16"
         >
-            <div class="flex size-12 items-center justify-center rounded-full bg-muted">
+            <div
+                class="flex size-12 items-center justify-center rounded-full bg-muted"
+            >
                 <Folder class="size-6 text-muted-foreground" />
             </div>
             <div class="space-y-1">
@@ -237,18 +283,27 @@ function deleteFolder() {
             v-else-if="visibleFolders.length === 0"
             class="flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed px-4 py-10 text-center sm:px-6 sm:py-14"
         >
-            <div class="flex size-12 items-center justify-center rounded-full bg-muted">
+            <div
+                class="flex size-12 items-center justify-center rounded-full bg-muted"
+            >
                 <Search class="size-5 text-muted-foreground" />
             </div>
             <div class="space-y-1">
                 <h2 class="font-medium">No matching folders</h2>
-                <p class="text-sm text-muted-foreground">Try a different folder name.</p>
+                <p class="text-sm text-muted-foreground">
+                    Try a different folder name.
+                </p>
             </div>
-            <Button variant="outline" size="sm" @click="search = ''">Clear search</Button>
+            <Button variant="outline" size="sm" @click="search = ''"
+                >Clear search</Button
+            >
         </div>
 
         <!-- Folder grid -->
-        <div v-else class="grid gap-3 sm:grid-cols-2 sm:gap-4 xl:grid-cols-3 2xl:grid-cols-4">
+        <div
+            v-else
+            class="grid gap-3 sm:grid-cols-2 sm:gap-4 xl:grid-cols-3 2xl:grid-cols-4"
+        >
             <Card
                 v-for="folder in visibleFolders"
                 :key="folder.id"
@@ -256,20 +311,41 @@ function deleteFolder() {
             >
                 <Link
                     :href="showFolderRoute.url(folder.id)"
-                    class="block rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    class="block rounded-xl focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
                 >
-                    <CardContent class="flex items-center gap-3 p-4 sm:gap-4 sm:p-5">
+                    <CardContent
+                        class="flex items-center gap-3 p-4 sm:gap-4 sm:p-5"
+                    >
                         <div
                             class="flex size-11 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary"
                         >
                             <Folder class="size-5" />
                         </div>
                         <div class="min-w-0 flex-1 pr-8">
-                            <div class="truncate font-medium leading-tight">{{ folder.name }}</div>
-                            <div class="mt-1 flex items-center gap-1.5 text-sm text-muted-foreground">
+                            <div class="truncate leading-tight font-medium">
+                                {{ folder.name }}
+                            </div>
+                            <div
+                                class="mt-1 flex items-center gap-1.5 text-sm text-muted-foreground"
+                            >
                                 <FileText class="size-3.5" />
                                 {{ folder.documents_count }}
-                                {{ folder.documents_count === 1 ? 'file' : 'files' }}
+                                {{
+                                    folder.documents_count === 1
+                                        ? 'file'
+                                        : 'files'
+                                }}
+                            </div>
+                            <div
+                                v-if="folder.children_count > 0"
+                                class="mt-1 text-xs text-muted-foreground"
+                            >
+                                {{ folder.children_count }}
+                                {{
+                                    folder.children_count === 1
+                                        ? 'subfolder'
+                                        : 'subfolders'
+                                }}
                             </div>
                         </div>
                     </CardContent>
@@ -307,12 +383,19 @@ function deleteFolder() {
     </div>
 
     <!-- Rename dialog -->
-    <Dialog :open="!!renameTarget" @update:open="(open: boolean) => !open && closeRename()">
-        <DialogContent class="max-h-[90vh] max-h-[90dvh] overflow-y-auto sm:max-w-md">
+    <Dialog
+        :open="!!renameTarget"
+        @update:open="(open: boolean) => !open && closeRename()"
+    >
+        <DialogContent
+            class="max-h-[90dvh] max-h-[90vh] overflow-y-auto sm:max-w-md"
+        >
             <form class="grid gap-4" @submit.prevent="renameFolder">
                 <DialogHeader>
                     <DialogTitle>Rename folder</DialogTitle>
-                    <DialogDescription>Enter a new name for this folder.</DialogDescription>
+                    <DialogDescription
+                        >Enter a new name for this folder.</DialogDescription
+                    >
                 </DialogHeader>
 
                 <div class="grid gap-2">
@@ -323,13 +406,22 @@ function deleteFolder() {
                         autocomplete="off"
                         :aria-invalid="!!renameForm.errors.name"
                     />
-                    <p v-if="renameForm.errors.name" class="text-sm text-destructive">
+                    <p
+                        v-if="renameForm.errors.name"
+                        class="text-sm text-destructive"
+                    >
                         {{ renameForm.errors.name }}
                     </p>
                 </div>
 
                 <DialogFooter class="gap-2 sm:gap-0">
-                    <Button type="button" variant="outline" class="w-full sm:w-auto" @click="closeRename">Cancel</Button>
+                    <Button
+                        type="button"
+                        variant="outline"
+                        class="w-full sm:w-auto"
+                        @click="closeRename"
+                        >Cancel</Button
+                    >
                     <Button
                         type="submit"
                         class="w-full sm:w-auto"
@@ -347,19 +439,27 @@ function deleteFolder() {
     </Dialog>
 
     <!-- Delete confirmation -->
-    <Dialog :open="!!deleteTarget" @update:open="(open: boolean) => !open && (deleteTarget = null)">
-        <DialogContent class="max-h-[90vh] max-h-[90dvh] overflow-y-auto">
+    <Dialog
+        :open="!!deleteTarget"
+        @update:open="(open: boolean) => !open && (deleteTarget = null)"
+    >
+        <DialogContent class="max-h-[90dvh] max-h-[90vh] overflow-y-auto">
             <DialogHeader>
                 <DialogTitle>Delete "{{ deleteTarget?.name }}"?</DialogTitle>
                 <DialogDescription>
                     This will permanently delete the folder and all
-                    {{ deleteTarget?.documents_count ?? 0 }} file(s) inside it. This action cannot be
-                    undone.
+                    {{ deleteTarget?.documents_count ?? 0 }} file(s) inside it.
+                    This action cannot be undone.
                 </DialogDescription>
             </DialogHeader>
             <DialogFooter>
                 <DialogClose as-child>
-                    <Button type="button" variant="outline" class="w-full sm:w-auto">Cancel</Button>
+                    <Button
+                        type="button"
+                        variant="outline"
+                        class="w-full sm:w-auto"
+                        >Cancel</Button
+                    >
                 </DialogClose>
                 <Button
                     type="button"

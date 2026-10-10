@@ -23,6 +23,9 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::resource('folders', FolderController::class)
         ->only(['index', 'store', 'show', 'update', 'destroy']);
 
+    Route::post('folders/{folder}/subfolders', [FolderController::class, 'storeSubfolder'])
+        ->name('folders.subfolders.store');
+
     Route::post('folders/{folder}/documents', [DocumentController::class, 'store']);
     Route::get('documents/{document}/preview', [DocumentController::class, 'preview']);
     Route::get('documents/{document}/download', [DocumentController::class, 'download']);

@@ -16,4 +16,5 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/folders', [ScannerController::class, 'folders']);
     Route::post('/folders', [ScannerController::class, 'storeFolder']);
     Route::post('/folders/{folder}/documents', [ScannerController::class, 'upload']);
+    Route::post('/folders/{folder}/subfolders', [ScannerController::class, 'storeSubfolderWithUploads']);
 });

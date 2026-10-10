@@ -2,14 +2,21 @@
 import { Head, Link, router, useForm, usePage } from '@inertiajs/vue3';
 import {
     ArrowLeft,
+    ChevronRight,
     Download,
     Eye,
+    FileImage,
+    FileSpreadsheet,
     FileText,
+    FileType,
     Files,
     Folder,
+    FolderOpen,
+    FolderPlus,
     HardDrive,
     ScanLine,
     Search,
+    Presentation,
     Trash2,
     Upload,
     X,
@@ -35,6 +42,10 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import {
+    destroy as destroyFolder,
+    storeSubfolder as storeSubfolderRoute,
+} from '@/actions/App/Http/Controllers/FolderController';
 import DatePicker from '@/components/ui/date-picker/DatePicker.vue';
 import {
     Select,
@@ -73,8 +84,53 @@ interface PaginatedDocuments {
     next_page_url: string | null;
 }
 
+interface SubfolderRow {
+    id: number;
+    name: string;
+    documents_count: number;
+    size: number;
+    source: string;
+    created_by_name: string | null;
+    created_at: string;
+}
+
+const documentTypeIcons = {
+    pdf: { icon: FileText, color: 'text-red-600' },
+    image: { icon: FileImage, color: 'text-violet-600' },
+    word: { icon: FileType, color: 'text-blue-600' },
+    spreadsheet: { icon: FileSpreadsheet, color: 'text-emerald-600' },
+    presentation: { icon: Presentation, color: 'text-orange-600' },
+    other: { icon: FileText, color: 'text-muted-foreground' },
+};
+
+function documentType(filename: string) {
+    const extension = filename.split('.').pop()?.toLowerCase() ?? '';
+
+    if (extension === 'pdf') return documentTypeIcons.pdf;
+    if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'].includes(extension)) {
+        return documentTypeIcons.image;
+    }
+    if (['doc', 'docx', 'odt', 'rtf'].includes(extension)) {
+        return documentTypeIcons.word;
+    }
+    if (['xls', 'xlsx', 'csv', 'ods'].includes(extension)) {
+        return documentTypeIcons.spreadsheet;
+    }
+    if (['ppt', 'pptx', 'odp'].includes(extension)) {
+        return documentTypeIcons.presentation;
+    }
+
+    return documentTypeIcons.other;
+}
+
 const props = defineProps<{
-    folder: { id: number; name: string };
+    folder: {
+        id: number;
+        name: string;
+        parent_id: number | null;
+        parent: { id: number; name: string } | null;
+    };
+    subfolders: SubfolderRow[];
     documents: PaginatedDocuments;
     search: string;
     dateFrom: string;
@@ -86,12 +142,27 @@ const props = defineProps<{
 }>();
 
 defineOptions({
-    layout: (pageProps: { folder: { id: number; name: string } }) => ({
+    layout: (pageProps: {
+        folder: {
+            id: number;
+            name: string;
+            parent_id: number | null;
+            parent: { id: number; name: string } | null;
+        };
+    }) => ({
         breadcrumbs: [
-            { title: 'Folders', href: '/folders' },
+            { title: 'Folders', href: foldersIndex.url() },
+            ...(pageProps.folder.parent
+                ? [
+                      {
+                          title: pageProps.folder.parent.name,
+                          href: showFolder.url(pageProps.folder.parent.id),
+                      },
+                  ]
+                : []),
             {
                 title: pageProps.folder.name,
-                href: `/folders/${pageProps.folder.id}`,
+                href: showFolder.url(pageProps.folder.id),
             },
         ],
     }),
@@ -103,6 +174,9 @@ const isSuperAdmin = computed(() => currentUser.value?.role === 'super_admin');
 
 const fileInput = ref<HTMLInputElement | null>(null);
 const uploadOpen = ref(false);
+const subfolderOpen = ref(false);
+const subfolderDeleteTarget = ref<SubfolderRow | null>(null);
+const deletingSubfolder = ref(false);
 const deleteTarget = ref<DocRow | null>(null);
 const deletingDocument = ref(false);
 const searchInput = ref(props.search);
@@ -114,6 +188,7 @@ const form = useForm({
     title: '',
     file: null as File | null,
 });
+const subfolderForm = useForm({ name: '' });
 
 watch(
     () => [props.search, props.dateFrom, props.dateTo, props.perPage] as const,
@@ -211,6 +286,37 @@ function upload() {
     });
 }
 
+function onSubfolderDialogOpenChange(open: boolean) {
+    subfolderOpen.value = open;
+
+    if (!open) {
+        subfolderForm.reset();
+        subfolderForm.clearErrors();
+    }
+}
+
+function createSubfolder() {
+    subfolderForm.post(storeSubfolderRoute.url(props.folder.id), {
+        preserveScroll: true,
+        onSuccess: () => onSubfolderDialogOpenChange(false),
+    });
+}
+
+function deleteSelectedSubfolder() {
+    if (!subfolderDeleteTarget.value) {
+        return;
+    }
+
+    deletingSubfolder.value = true;
+    router.delete(destroyFolder.url(subfolderDeleteTarget.value.id), {
+        preserveScroll: true,
+        onFinish: () => {
+            deletingSubfolder.value = false;
+            subfolderDeleteTarget.value = null;
+        },
+    });
+}
+
 function canDelete(doc: DocRow) {
     return isSuperAdmin.value || doc.uploaded_by === currentUser.value?.id;
 }
@@ -259,17 +365,35 @@ function formatSize(bytes: number) {
                     </h1>
                 </div>
             </div>
-            <div class="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto">
+            <div class="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
                 <Button variant="outline" class="w-full sm:w-auto" as-child>
                     <Link :href="foldersIndex.url()">
                         <ArrowLeft class="size-4" />
                         All folders
                     </Link>
                 </Button>
-                <Button class="w-full sm:w-auto" @click="uploadOpen = true">
-                    <Upload class="size-4" />
-                    Upload file
-                </Button>
+                <div
+                    class="grid w-full gap-2 sm:w-auto"
+                    :class="
+                        folder.parent_id === null
+                            ? 'grid-cols-2'
+                            : 'grid-cols-1'
+                    "
+                >
+                    <Button
+                        v-if="folder.parent_id === null"
+                        variant="outline"
+                        class="w-full sm:w-auto"
+                        @click="subfolderOpen = true"
+                    >
+                        <FolderPlus class="size-4" />
+                        New subfolder
+                    </Button>
+                    <Button class="w-full sm:w-auto" @click="uploadOpen = true">
+                        <Upload class="size-4" />
+                        Upload file
+                    </Button>
+                </div>
             </div>
         </header>
 
@@ -348,9 +472,10 @@ function formatSize(bytes: number) {
         <Card class="overflow-hidden">
             <CardHeader class="flex flex-col gap-4 border-b px-4 py-4 sm:px-5">
                 <div class="space-y-1">
-                    <CardTitle class="text-base">Documents</CardTitle>
+                    <CardTitle class="text-base">Contents</CardTitle>
                     <CardDescription
-                        >Files stored in {{ folder.name }}.</CardDescription
+                        >Documents and subfolders in
+                        {{ folder.name }}.</CardDescription
                     >
                 </div>
                 <form
@@ -437,7 +562,7 @@ function formatSize(bytes: number) {
                 </form>
             </CardHeader>
             <CardContent
-                v-if="totalDocuments === 0"
+                v-if="totalDocuments === 0 && subfolders.length === 0"
                 class="flex flex-col items-center gap-3 px-6 py-14 text-center"
             >
                 <div
@@ -457,245 +582,249 @@ function formatSize(bytes: number) {
                 </Button>
             </CardContent>
             <CardContent v-else class="p-0">
-                <div
-                    v-if="documents.total === 0"
-                    class="flex flex-col items-center gap-3 px-6 py-12 text-center"
-                >
-                    <Search class="size-7 text-muted-foreground" />
-                    <div class="space-y-1">
-                        <p class="font-medium">No matching documents</p>
-                        <p class="text-sm text-muted-foreground">
-                            Try another title, filename, uploader, or source.
-                        </p>
-                    </div>
-                    <Button variant="outline" size="sm" @click="clearSearch"
-                        >Clear search</Button
-                    >
-                </div>
-                <template v-else>
-                    <div class="divide-y xl:hidden">
-                        <article
-                            v-for="doc in documents.data"
-                            :key="doc.id"
-                            class="space-y-3 p-4"
+                <div class="overflow-x-auto">
+                    <table class="w-full min-w-[58rem] text-left text-sm">
+                        <thead
+                            class="bg-muted/40 text-xs text-muted-foreground"
                         >
-                            <div class="flex min-w-0 items-start gap-3">
-                                <div
-                                    class="flex size-9 shrink-0 items-center justify-center rounded-md border bg-background"
-                                >
-                                    <FileText
-                                        class="size-4 text-muted-foreground"
-                                    />
-                                </div>
-                                <div class="min-w-0 flex-1">
-                                    <p class="text-sm font-medium break-words">
-                                        {{ doc.title }}
-                                    </p>
-                                    <p
-                                        class="mt-0.5 text-xs break-all text-muted-foreground"
-                                    >
-                                        {{ doc.original_name }}
-                                    </p>
-                                </div>
-                            </div>
-                            <dl
-                                class="grid grid-cols-2 gap-x-3 gap-y-2 text-xs"
+                            <tr>
+                                <th class="px-5 py-3 font-medium">Name</th>
+                                <th class="px-5 py-3 font-medium">Size</th>
+                                <th class="px-5 py-3 font-medium">Source</th>
+                                <th class="px-5 py-3 font-medium">
+                                    Uploaded by
+                                </th>
+                                <th class="px-5 py-3 font-medium">
+                                    Date added
+                                </th>
+                                <th class="px-5 py-3 text-right font-medium">
+                                    Actions
+                                </th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr
+                                v-for="subfolder in subfolders"
+                                :key="`folder-${subfolder.id}`"
+                                class="border-t transition-colors hover:bg-muted/30"
                             >
-                                <div class="min-w-0">
-                                    <dt class="text-muted-foreground">Size</dt>
-                                    <dd class="mt-0.5 tabular-nums">
-                                        {{ formatSize(doc.size) }}
-                                    </dd>
-                                </div>
-                                <div class="min-w-0">
-                                    <dt class="text-muted-foreground">
-                                        Source
-                                    </dt>
-                                    <dd class="mt-0.5">
+                                <td class="px-5 py-3.5">
+                                    <Link
+                                        :href="showFolder.url(subfolder.id)"
+                                        class="flex min-w-0 items-center gap-3 font-medium hover:text-primary"
+                                    >
+                                        <span
+                                            class="flex size-9 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary"
+                                        >
+                                            <Folder class="size-4" />
+                                        </span>
+                                        <span class="min-w-0">
+                                            <span class="block truncate">{{
+                                                subfolder.name
+                                            }}</span>
+                                            <span
+                                                class="mt-1 block text-xs font-normal text-muted-foreground"
+                                            >
+                                                Subfolder ·
+                                                {{ subfolder.documents_count }}
+                                                {{
+                                                    subfolder.documents_count ===
+                                                    1
+                                                        ? 'file'
+                                                        : 'files'
+                                                }}
+                                            </span>
+                                        </span>
+                                        <ChevronRight
+                                            class="ml-auto size-4 shrink-0 text-muted-foreground"
+                                        />
+                                    </Link>
+                                </td>
+                                <td
+                                    class="px-5 py-3.5 whitespace-nowrap text-muted-foreground tabular-nums"
+                                >
+                                    {{ formatSize(subfolder.size) }}
+                                </td>
+                                <td class="px-5 py-3.5 text-muted-foreground">
+                                    {{
+                                        subfolder.source === 'scanner'
+                                            ? 'Scanner'
+                                            : 'Manual'
+                                    }}
+                                </td>
+                                <td class="px-5 py-3.5 text-muted-foreground">
+                                    {{ subfolder.created_by_name ?? '' }}
+                                </td>
+                                <td
+                                    class="px-5 py-3.5 whitespace-nowrap text-muted-foreground"
+                                >
+                                    {{ subfolder.created_at }}
+                                </td>
+                                <td class="px-5 py-3.5 text-right">
+                                    <div class="inline-flex items-center gap-1">
+                                        <Button
+                                            type="button"
+                                            variant="ghost"
+                                            size="icon-sm"
+                                            as-child
+                                        >
+                                            <Link
+                                                :href="
+                                                    showFolder.url(subfolder.id)
+                                                "
+                                                :aria-label="`Open ${subfolder.name}`"
+                                                title="Open subfolder"
+                                            >
+                                                <FolderOpen class="size-4" />
+                                            </Link>
+                                        </Button>
+                                        <Button
+                                            v-if="isSuperAdmin"
+                                            type="button"
+                                            variant="ghost"
+                                            size="icon-sm"
+                                            class="text-destructive hover:text-destructive"
+                                            :aria-label="`Delete ${subfolder.name}`"
+                                            title="Delete subfolder"
+                                            @click="
+                                                subfolderDeleteTarget =
+                                                    subfolder
+                                            "
+                                        >
+                                            <Trash2 class="size-4" />
+                                        </Button>
+                                    </div>
+                                </td>
+                            </tr>
+                            <tr
+                                v-for="doc in documents.data"
+                                :key="`document-${doc.id}`"
+                                class="border-t transition-colors hover:bg-muted/30"
+                            >
+                                <td class="px-5 py-3.5">
+                                    <div
+                                        class="flex min-w-0 items-center gap-3"
+                                    >
+                                        <span
+                                            class="flex size-9 shrink-0 items-center justify-center rounded-md border bg-background"
+                                        >
+                                            <component
+                                                :is="
+                                                    documentType(
+                                                        doc.original_name,
+                                                    ).icon
+                                                "
+                                                class="size-4"
+                                                :class="
+                                                    documentType(
+                                                        doc.original_name,
+                                                    ).color
+                                                "
+                                            />
+                                        </span>
+                                        <span class="min-w-0">
+                                            <span
+                                                class="block truncate font-medium"
+                                                >{{ doc.title }}</span
+                                            >
+                                            <span
+                                                class="mt-1 block truncate text-xs text-muted-foreground"
+                                                >{{ doc.original_name }}</span
+                                            >
+                                        </span>
+                                    </div>
+                                </td>
+                                <td
+                                    class="px-5 py-3.5 whitespace-nowrap text-muted-foreground tabular-nums"
+                                >
+                                    {{ formatSize(doc.size) }}
+                                </td>
+                                <td class="px-5 py-3.5">
+                                    <span
+                                        class="inline-flex rounded-md border px-2 py-1 text-xs font-medium"
+                                    >
                                         {{
                                             doc.source === 'scanner'
                                                 ? 'Scanner'
                                                 : 'Manual'
                                         }}
-                                    </dd>
-                                </div>
-                                <div class="min-w-0">
-                                    <dt class="text-muted-foreground">
-                                        Uploaded by
-                                    </dt>
-                                    <dd class="mt-0.5 truncate">
-                                        {{ doc.uploader_name ?? '-' }}
-                                    </dd>
-                                </div>
-                                <div class="min-w-0">
-                                    <dt class="text-muted-foreground">
-                                        Date added
-                                    </dt>
-                                    <dd class="mt-0.5 break-words">
-                                        {{ doc.created_at }}
-                                    </dd>
-                                </div>
-                            </dl>
-                            <div class="flex justify-end gap-1">
-                                <a
-                                    :href="previewDocument.url(doc.id)"
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    class="inline-flex size-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                                    :aria-label="`Preview ${doc.title}`"
-                                    title="Preview"
+                                    </span>
+                                </td>
+                                <td class="px-5 py-3.5 text-muted-foreground">
+                                    {{ doc.uploader_name ?? '' }}
+                                </td>
+                                <td
+                                    class="px-5 py-3.5 whitespace-nowrap text-muted-foreground"
                                 >
-                                    <Eye class="size-4" />
-                                </a>
-                                <a
-                                    :href="downloadDocument.url(doc.id)"
-                                    class="inline-flex size-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                                    :aria-label="`Download ${doc.title}`"
-                                    title="Download"
-                                >
-                                    <Download class="size-4" />
-                                </a>
-                                <Button
-                                    v-if="canDelete(doc)"
-                                    type="button"
-                                    variant="ghost"
-                                    size="icon"
-                                    class="text-destructive hover:text-destructive"
-                                    :aria-label="`Delete ${doc.title}`"
-                                    title="Delete file"
-                                    @click="remove(doc)"
-                                >
-                                    <Trash2 class="size-4" />
-                                </Button>
-                            </div>
-                        </article>
-                    </div>
-                    <div class="hidden overflow-x-auto xl:block">
-                        <table class="w-full min-w-[58rem] text-left text-sm">
-                            <thead
-                                class="bg-muted/40 text-xs text-muted-foreground"
-                            >
-                                <tr>
-                                    <th class="px-5 py-3 font-medium">
-                                        Document
-                                    </th>
-                                    <th class="px-5 py-3 font-medium">Size</th>
-                                    <th class="px-5 py-3 font-medium">
-                                        Source
-                                    </th>
-                                    <th class="px-5 py-3 font-medium">
-                                        Uploaded by
-                                    </th>
-                                    <th class="px-5 py-3 font-medium">
-                                        Date added
-                                    </th>
-                                    <th
-                                        class="px-5 py-3 text-right font-medium"
-                                    >
-                                        Actions
-                                    </th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <tr
-                                    v-for="doc in documents.data"
-                                    :key="doc.id"
-                                    class="border-t transition-colors hover:bg-muted/30"
-                                >
-                                    <td class="px-5 py-3.5">
-                                        <div
-                                            class="flex min-w-0 items-center gap-3"
+                                    {{ doc.created_at }}
+                                </td>
+                                <td class="px-5 py-3.5 text-right">
+                                    <div class="inline-flex items-center gap-1">
+                                        <a
+                                            :href="previewDocument.url(doc.id)"
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            class="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                                            :aria-label="`Preview ${doc.title}`"
+                                            title="Preview"
                                         >
-                                            <div
-                                                class="flex size-9 shrink-0 items-center justify-center rounded-md border bg-background"
+                                            <Eye class="size-4" />
+                                        </a>
+                                        <a
+                                            :href="downloadDocument.url(doc.id)"
+                                            class="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                                            :aria-label="`Download ${doc.title}`"
+                                            title="Download"
+                                        >
+                                            <Download class="size-4" />
+                                        </a>
+                                        <Button
+                                            v-if="canDelete(doc)"
+                                            type="button"
+                                            variant="ghost"
+                                            size="icon-sm"
+                                            class="text-destructive hover:text-destructive"
+                                            :aria-label="`Delete ${doc.title}`"
+                                            title="Delete file"
+                                            @click="remove(doc)"
+                                        >
+                                            <Trash2 class="size-4" />
+                                        </Button>
+                                    </div>
+                                </td>
+                            </tr>
+                            <tr v-if="documents.total === 0">
+                                <td colspan="6" class="px-5 py-12 text-center">
+                                    <div
+                                        class="flex flex-col items-center gap-3"
+                                    >
+                                        <Search
+                                            class="size-7 text-muted-foreground"
+                                        />
+                                        <div class="space-y-1">
+                                            <p class="font-medium">
+                                                No matching documents
+                                            </p>
+                                            <p
+                                                class="text-sm text-muted-foreground"
                                             >
-                                                <FileText
-                                                    class="size-4 text-muted-foreground"
-                                                />
-                                            </div>
-                                            <div class="min-w-0">
-                                                <p class="truncate font-medium">
-                                                    {{ doc.title }}
-                                                </p>
-                                                <p
-                                                    class="truncate text-xs text-muted-foreground"
-                                                >
-                                                    {{ doc.original_name }}
-                                                </p>
-                                            </div>
+                                                Try another title, filename,
+                                                uploader, or source.
+                                            </p>
                                         </div>
-                                    </td>
-                                    <td
-                                        class="px-5 py-3.5 text-muted-foreground tabular-nums"
-                                    >
-                                        {{ formatSize(doc.size) }}
-                                    </td>
-                                    <td class="px-5 py-3.5">
-                                        <span
-                                            class="inline-flex rounded-md border px-2 py-1 text-xs font-medium"
+                                        <Button
+                                            variant="outline"
+                                            size="sm"
+                                            @click="clearFilters"
                                         >
-                                            {{
-                                                doc.source === 'scanner'
-                                                    ? 'Scanner'
-                                                    : 'Manual'
-                                            }}
-                                        </span>
-                                    </td>
-                                    <td
-                                        class="px-5 py-3.5 text-muted-foreground"
-                                    >
-                                        {{ doc.uploader_name ?? '-' }}
-                                    </td>
-                                    <td
-                                        class="px-5 py-3.5 whitespace-nowrap text-muted-foreground"
-                                    >
-                                        {{ doc.created_at }}
-                                    </td>
-                                    <td class="px-5 py-3.5 text-right">
-                                        <div
-                                            class="inline-flex items-center gap-1"
-                                        >
-                                            <a
-                                                :href="
-                                                    previewDocument.url(doc.id)
-                                                "
-                                                target="_blank"
-                                                rel="noopener noreferrer"
-                                                class="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                                                :aria-label="`Preview ${doc.title}`"
-                                                title="Preview"
-                                            >
-                                                <Eye class="size-4" />
-                                            </a>
-                                            <a
-                                                :href="
-                                                    downloadDocument.url(doc.id)
-                                                "
-                                                class="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                                                :aria-label="`Download ${doc.title}`"
-                                                title="Download"
-                                            >
-                                                <Download class="size-4" />
-                                            </a>
-                                            <Button
-                                                v-if="canDelete(doc)"
-                                                type="button"
-                                                variant="ghost"
-                                                size="icon-sm"
-                                                class="text-destructive hover:text-destructive"
-                                                :aria-label="`Delete ${doc.title}`"
-                                                title="Delete file"
-                                                @click="remove(doc)"
-                                            >
-                                                <Trash2 class="size-4" />
-                                            </Button>
-                                        </div>
-                                    </td>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </template>
+                                            Clear filters
+                                        </Button>
+                                    </div>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
                 <nav
                     v-if="documents.total > 0"
                     aria-label="Document pages"
@@ -820,6 +949,102 @@ function formatSize(bytes: number) {
                     </Button>
                 </DialogFooter>
             </form>
+        </DialogContent>
+    </Dialog>
+
+    <Dialog :open="subfolderOpen" @update:open="onSubfolderDialogOpenChange">
+        <DialogContent
+            class="max-h-[90dvh] max-h-[90vh] overflow-y-auto sm:max-w-md"
+        >
+            <form class="grid gap-4" @submit.prevent="createSubfolder">
+                <DialogHeader>
+                    <DialogTitle>New subfolder</DialogTitle>
+                    <DialogDescription>
+                        Create a folder inside {{ folder.name }}.
+                    </DialogDescription>
+                </DialogHeader>
+                <div class="grid gap-2">
+                    <Label for="subfolder-name">Name</Label>
+                    <Input
+                        id="subfolder-name"
+                        v-model="subfolderForm.name"
+                        autocomplete="off"
+                        autofocus
+                        :aria-invalid="!!subfolderForm.errors.name"
+                    />
+                    <p
+                        v-if="subfolderForm.errors.name"
+                        class="text-sm text-destructive"
+                    >
+                        {{ subfolderForm.errors.name }}
+                    </p>
+                </div>
+                <DialogFooter class="gap-2 sm:gap-0">
+                    <DialogClose as-child>
+                        <Button
+                            type="button"
+                            variant="outline"
+                            class="w-full sm:w-auto"
+                        >
+                            Cancel
+                        </Button>
+                    </DialogClose>
+                    <Button
+                        type="submit"
+                        class="w-full sm:w-auto"
+                        :disabled="
+                            subfolderForm.processing ||
+                            !subfolderForm.name.trim()
+                        "
+                    >
+                        {{
+                            subfolderForm.processing
+                                ? 'Creating…'
+                                : 'Create subfolder'
+                        }}
+                    </Button>
+                </DialogFooter>
+            </form>
+        </DialogContent>
+    </Dialog>
+
+    <Dialog
+        :open="!!subfolderDeleteTarget"
+        @update:open="
+            (open: boolean) => !open && (subfolderDeleteTarget = null)
+        "
+    >
+        <DialogContent class="max-h-[90dvh] max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+                <DialogTitle
+                    >Delete "{{ subfolderDeleteTarget?.name }}"?</DialogTitle
+                >
+                <DialogDescription>
+                    This permanently deletes the subfolder and its
+                    {{ subfolderDeleteTarget?.documents_count ?? 0 }} files.
+                    This action cannot be undone.
+                </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+                <DialogClose as-child>
+                    <Button
+                        type="button"
+                        variant="outline"
+                        class="w-full sm:w-auto"
+                        :disabled="deletingSubfolder"
+                    >
+                        Cancel
+                    </Button>
+                </DialogClose>
+                <Button
+                    type="button"
+                    class="w-full bg-destructive text-white hover:bg-destructive/90 sm:w-auto"
+                    :disabled="deletingSubfolder"
+                    @click.prevent="deleteSelectedSubfolder"
+                >
+                    {{ deletingSubfolder ? 'Deleting…' : 'Delete subfolder' }}
+                </Button>
+            </DialogFooter>
         </DialogContent>
     </Dialog>
 

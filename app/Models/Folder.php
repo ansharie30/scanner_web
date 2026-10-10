@@ -8,7 +8,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Folder extends Model
 {
-    protected $fillable = ['name', 'created_by'];
+    protected $fillable = ['name', 'created_by', 'parent_id', 'source'];
 
     public function documents(): HasMany
     {
@@ -18,5 +18,15 @@ class Folder extends Model
     public function creator(): BelongsTo
     {
         return $this->belongsTo(User::class, 'created_by');
+    }
+
+    public function parent(): BelongsTo
+    {
+        return $this->belongsTo(Folder::class, 'parent_id');
+    }
+
+    public function children(): HasMany
+    {
+        return $this->hasMany(Folder::class, 'parent_id');
     }
 }

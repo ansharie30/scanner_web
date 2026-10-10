@@ -17,7 +17,13 @@ class FolderController extends Controller
     public function index(): Response
     {
         return Inertia::render('folders/Index', [
-            'folders' => Folder::withCount('documents')->orderBy('name')->get(),
+            'folders' => Folder::query()
+                ->whereNull('parent_id')
+                ->withCount(['documents', 'children'])
+                ->orderBy('name')
+                ->get(['id', 'name']),
+            'totalFolders' => Folder::query()->count(),
+            'totalDocuments' => Document::query()->count(),
         ]);
     }
 
@@ -30,6 +36,24 @@ class FolderController extends Controller
         Folder::create([
             'name' => trim($data['name']),
             'created_by' => $request->user()->id,
+            'source' => 'manual',
+        ]);
+
+        return back();
+    }
+
+    public function storeSubfolder(Request $request, Folder $folder): RedirectResponse
+    {
+        abort_unless($folder->parent_id === null, 403, 'Subfolders can only be created inside top-level folders.');
+
+        $data = $request->validate([
+            'name' => ['required', 'string', 'max:255', 'unique:folders,name'],
+        ]);
+
+        $folder->children()->create([
+            'name' => trim($data['name']),
+            'created_by' => $request->user()->id,
+            'source' => 'manual',
         ]);
 
         return back();
@@ -87,7 +111,25 @@ class FolderController extends Controller
             ]);
 
         return Inertia::render('folders/Show', [
-            'folder' => $folder->only(['id', 'name']),
+            'folder' => [
+                ...$folder->only(['id', 'name', 'parent_id']),
+                'parent' => $folder->parent?->only(['id', 'name']),
+            ],
+            'subfolders' => $folder->children()
+                ->with(['creator:id,name'])
+                ->withCount('documents')
+                ->withSum('documents', 'size')
+                ->orderBy('name')
+                ->get(['id', 'name', 'parent_id', 'created_by', 'source', 'created_at'])
+                ->map(fn (Folder $subfolder): array => [
+                    'id' => $subfolder->id,
+                    'name' => $subfolder->name,
+                    'documents_count' => $subfolder->documents_count,
+                    'size' => (int) ($subfolder->documents_sum_size ?? 0),
+                    'source' => $subfolder->source,
+                    'created_by_name' => $subfolder->creator?->name,
+                    'created_at' => $subfolder->created_at?->format('M d, Y h:i A') ?? '-',
+                ]),
             'documents' => $documents,
             'search' => $search,
             'dateFrom' => $dateFrom,
@@ -116,9 +158,26 @@ class FolderController extends Controller
     {
         abort_unless($request->user()->isSuperAdmin(), 403);
 
-        Storage::disk('local')->deleteDirectory("documents/{$folder->id}");
+        $parentId = $folder->parent_id;
+        $folderIds = [$folder->id];
+        $parentIds = $folderIds;
+
+        while ($parentIds !== []) {
+            $parentIds = Folder::query()
+                ->whereIn('parent_id', $parentIds)
+                ->pluck('id')
+                ->all();
+            $folderIds = [...$folderIds, ...$parentIds];
+        }
+
+        foreach ($folderIds as $folderId) {
+            Storage::disk('local')->deleteDirectory("documents/{$folderId}");
+        }
+
         $folder->delete();
 
-        return redirect('/folders');
+        return $parentId === null
+            ? redirect('/folders')
+            : redirect()->route('folders.show', $parentId);
     }
 }

@@ -4,6 +4,7 @@ use App\Models\Document;
 use App\Models\Folder;
 use App\Models\User;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Storage;
 use Inertia\Testing\AssertableInertia as Assert;
 
 test('folder documents can be searched by title filename uploader and source', function () {
@@ -158,4 +159,138 @@ test('folder documents can be filtered by inclusive added dates and page size', 
         ->where('dateTo', '2026-10-10')
         ->where('documents.total', 2)
     );
+});
+
+test('a folder can contain and display child folders', function () {
+    $user = User::factory()->create();
+    $parent = Folder::create(['name' => 'Parent folder', 'created_by' => $user->id]);
+
+    $response = $this->actingAs($user)->post(route('folders.subfolders.store', $parent), [
+        'name' => 'Child folder',
+    ]);
+
+    $child = Folder::query()->where('name', 'Child folder')->firstOrFail();
+
+    $response->assertRedirect();
+    $this->assertDatabaseHas('folders', [
+        'id' => $child->id,
+        'parent_id' => $parent->id,
+    ]);
+
+    Document::create([
+        'folder_id' => $child->id,
+        'uploaded_by' => $user->id,
+        'title' => 'Child document',
+        'original_name' => 'child.pdf',
+        'path' => "documents/{$child->id}/child.pdf",
+        'mime_type' => 'application/pdf',
+        'size' => 4096,
+        'source' => 'manual',
+    ]);
+
+    $this->actingAs($user)->get(route('folders.show', $parent))
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->component('folders/Show')
+            ->has('subfolders', 1, fn (Assert $page) => $page
+                ->where('id', $child->id)
+                ->where('name', 'Child folder')
+                ->where('documents_count', 1)
+                ->where('size', 4096)
+                ->where('source', 'manual')
+                ->where('created_by_name', $user->name)
+                ->where('created_at', $child->created_at->format('M d, Y h:i A'))
+                ->etc()
+            )
+        );
+});
+
+test('a subfolder cannot create another subfolder', function () {
+    $user = User::factory()->create();
+    $root = Folder::create(['name' => 'Root folder', 'created_by' => $user->id]);
+    $child = $root->children()->create([
+        'name' => 'Child folder',
+        'created_by' => $user->id,
+    ]);
+
+    $this->actingAs($user)
+        ->post(route('folders.subfolders.store', $child), ['name' => 'Grandchild folder'])
+        ->assertForbidden();
+
+    $this->assertDatabaseMissing('folders', [
+        'name' => 'Grandchild folder',
+        'parent_id' => $child->id,
+    ]);
+});
+
+test('the folder index lists roots while totals include nested folders and files', function () {
+    $user = User::factory()->create();
+    $root = Folder::create(['name' => 'Root folder', 'created_by' => $user->id]);
+    $child = Folder::create([
+        'name' => 'Nested folder',
+        'created_by' => $user->id,
+        'parent_id' => $root->id,
+    ]);
+
+    Document::create([
+        'folder_id' => $child->id,
+        'uploaded_by' => $user->id,
+        'title' => 'Nested file',
+        'original_name' => 'nested.pdf',
+        'path' => "documents/{$child->id}/nested.pdf",
+        'mime_type' => 'application/pdf',
+        'size' => 2048,
+        'source' => 'manual',
+    ]);
+
+    $this->actingAs($user)->get(route('folders.index'))
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->component('folders/Index')
+            ->has('folders', 1, fn (Assert $page) => $page
+                ->where('id', $root->id)
+                ->where('children_count', 1)
+                ->etc()
+            )
+            ->where('totalFolders', 2)
+            ->where('totalDocuments', 1)
+        );
+});
+
+test('deleting a parent folder removes nested folders and their stored files', function () {
+    Storage::fake('local');
+
+    $admin = User::factory()->create(['role' => 'super_admin']);
+    $root = Folder::create(['name' => 'Delete root', 'created_by' => $admin->id]);
+    $child = Folder::create([
+        'name' => 'Delete child',
+        'created_by' => $admin->id,
+        'parent_id' => $root->id,
+    ]);
+    $grandchild = Folder::create([
+        'name' => 'Delete grandchild',
+        'created_by' => $admin->id,
+        'parent_id' => $child->id,
+    ]);
+    $path = "documents/{$grandchild->id}/nested.pdf";
+    Storage::disk('local')->put($path, 'document');
+    $document = Document::create([
+        'folder_id' => $grandchild->id,
+        'uploaded_by' => $admin->id,
+        'title' => 'Nested document',
+        'original_name' => 'nested.pdf',
+        'path' => $path,
+        'mime_type' => 'application/pdf',
+        'size' => 8,
+        'source' => 'manual',
+    ]);
+
+    $this->actingAs($admin)->delete(route('folders.destroy', $root))
+        ->assertRedirect('/folders');
+
+    $this->assertDatabaseMissing('folders', ['id' => $root->id]);
+    $this->assertDatabaseMissing('folders', ['id' => $child->id]);
+    $this->assertDatabaseMissing('folders', ['id' => $grandchild->id]);
+    $this->assertDatabaseMissing('documents', ['id' => $document->id]);
+    Storage::disk('local')->assertMissing($path);
 });
